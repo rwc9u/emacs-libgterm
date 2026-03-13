@@ -42,6 +42,11 @@ const GtermInstance = struct {
             .terminal = try .init(allocator, .{
                 .cols = cols,
                 .rows = rows,
+                // Enable linefeed mode: LF (\n) implies CR (\r).
+                // Emacs strips \r from PTY output, so the terminal
+                // only sees \n. Without this, the cursor stays at the
+                // current column on LF instead of returning to col 0.
+                .default_modes = .{ .linefeed = true },
             }),
             .rows = rows,
             .cols = cols,
