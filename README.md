@@ -20,7 +20,25 @@ This project follows the same architecture as [emacs-libvterm](https://github.co
 
 ## Installation
 
-### use-package (recommended)
+### use-package + straight.el (recommended)
+
+```elisp
+(use-package gterm
+  :straight (:host github :repo "rwc9u/emacs-libgterm")
+  :init
+  (setq gterm-always-compile-module t))
+```
+
+### use-package + quelpa
+
+```elisp
+(use-package gterm
+  :quelpa (gterm :fetcher github :repo "rwc9u/emacs-libgterm")
+  :init
+  (setq gterm-always-compile-module t))
+```
+
+### use-package + local clone
 
 ```elisp
 (use-package gterm
