@@ -68,6 +68,9 @@
 (defvar-local gterm--width 80
   "Current terminal width in columns.")
 
+(defvar-local gterm--scrollback-p nil
+  "Non-nil when viewport is scrolled up from the active area.")
+
 (defvar-local gterm--height 24
   "Current terminal height in rows.")
 
@@ -97,6 +100,10 @@ PROCESS is the shell process. OUTPUT is the raw string."
       (with-current-buffer buf
         (when gterm--term
           (gterm-feed gterm--term output)
+          ;; Only auto-scroll to bottom if we were already at bottom
+          (unless gterm--scrollback-p
+            (when (fboundp 'gterm-scroll-viewport)
+              (gterm-scroll-viewport gterm--term 0)))
           (gterm--refresh))))))
 
 (defun gterm--sentinel (process _event)
@@ -114,6 +121,11 @@ PROCESS is the shell process."
 (defun gterm-send-string (string)
   "Send STRING to the terminal's shell process."
   (when (and gterm--process (process-live-p gterm--process))
+    ;; Snap to bottom on any user input
+    (when gterm--scrollback-p
+      (when (fboundp 'gterm-scroll-viewport)
+        (gterm-scroll-viewport gterm--term 0))
+      (setq gterm--scrollback-p nil))
     (process-send-string gterm--process string)))
 
 (defun gterm-send-key ()
@@ -227,6 +239,33 @@ PROCESS is the shell process."
 (defun gterm-send-M-right () (interactive) (gterm--send-escape-seq "[1;3C"))
 (defun gterm-send-M-left ()  (interactive) (gterm--send-escape-seq "[1;3D"))
 
+;; ── Scrollback ──────────────────────────────────────────────────────────
+
+(defun gterm-scroll-up ()
+  "Scroll the terminal viewport up into scrollback history."
+  (interactive)
+  (when gterm--term
+    (gterm-scroll-viewport gterm--term (- (/ gterm--height 2)))
+    (setq gterm--scrollback-p t)
+    (gterm--refresh)))
+
+(defun gterm-scroll-down ()
+  "Scroll the terminal viewport down toward live output."
+  (interactive)
+  (when gterm--term
+    (gterm-scroll-viewport gterm--term (/ gterm--height 2))
+    (setq gterm--scrollback-p
+          (not (gterm-viewport-is-bottom gterm--term)))
+    (gterm--refresh)))
+
+(defun gterm-scroll-to-bottom ()
+  "Scroll the terminal viewport back to the live terminal."
+  (interactive)
+  (when gterm--term
+    (gterm-scroll-viewport gterm--term 0)
+    (setq gterm--scrollback-p nil)
+    (gterm--refresh)))
+
 ;; ── Window size tracking ────────────────────────────────────────────────
 
 (defun gterm--calculate-size ()
@@ -306,6 +345,10 @@ PROCESS is the shell process."
     (define-key map (kbd "C-<left>") #'gterm-send-C-left)
     (define-key map (kbd "M-<right>") #'gterm-send-M-right)
     (define-key map (kbd "M-<left>") #'gterm-send-M-left)
+    ;; Scrollback (Shift+PageUp/Down like most terminals)
+    (define-key map (kbd "S-<prior>") #'gterm-scroll-up)
+    (define-key map (kbd "S-<next>") #'gterm-scroll-down)
+    (define-key map (kbd "C-c C-v") #'gterm-scroll-to-bottom)
     map)
   "Keymap for `gterm-mode'.")
 

@@ -644,6 +644,45 @@ fn gtermCursorKeysMode(
     return emacs.nil(env);
 }
 
+/// (gterm-scroll-viewport TERM DELTA) -> nil
+/// Scroll viewport. Negative = up (into history), positive = down.
+/// 0 = scroll to bottom (active area).
+fn gtermScrollViewport(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    const delta = env.extract_integer.?(env, args[1]);
+    if (emacs.check_exit(env)) return emacs.nil(env);
+
+    if (delta == 0) {
+        instance.terminal.scrollViewport(.bottom);
+    } else {
+        instance.terminal.scrollViewport(.{ .delta = @intCast(delta) });
+    }
+
+    return emacs.nil(env);
+}
+
+/// (gterm-viewport-is-bottom TERM) -> t or nil
+/// Return t if viewport is at the bottom (showing live terminal output).
+fn gtermViewportIsBottom(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    return switch (instance.terminal.screens.active.pages.viewport) {
+        .active => emacs.t_val(env),
+        else => emacs.nil(env),
+    };
+}
+
 // ── Module entry point ──────────────────────────────────────────────────
 
 /// Called by Emacs when the module is loaded via (require 'gterm-module).
@@ -685,6 +724,14 @@ export fn emacs_module_init(runtime: ?*emacs.emacs_runtime) callconv(.c) c_int {
 
     emacs.defun(env, "gterm-cursor-keys-mode", 1, 1, &gtermCursorKeysMode,
         "Return t if terminal TERM is in application cursor keys mode (DECCKM).",
+    );
+
+    emacs.defun(env, "gterm-scroll-viewport", 2, 2, &gtermScrollViewport,
+        "Scroll viewport of terminal TERM by DELTA rows.\nNegative scrolls up (into history), positive scrolls down.\n0 scrolls to the active area (bottom).",
+    );
+
+    emacs.defun(env, "gterm-viewport-is-bottom", 1, 1, &gtermViewportIsBottom,
+        "Return t if terminal TERM viewport is at the bottom (active area).",
     );
 
     emacs.provide(env, "gterm-module");
