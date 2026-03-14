@@ -68,6 +68,12 @@
 (defvar-local gterm--width 80
   "Current terminal width in columns.")
 
+(defvar-local gterm--refresh-timer nil
+  "Timer for batched refresh.")
+
+(defvar-local gterm--needs-refresh nil
+  "Non-nil when a refresh is pending.")
+
 (defvar-local gterm--scrollback-p nil
   "Non-nil when viewport is scrolled up from the active area.")
 
@@ -94,6 +100,20 @@
           (setq-local cursor-type
                       (if visible style nil)))))))
 
+(defun gterm--schedule-refresh ()
+  "Schedule a batched refresh.  Coalesces rapid output into one render."
+  (unless gterm--needs-refresh
+    (setq gterm--needs-refresh t)
+    (let ((buf (current-buffer)))
+      (setq gterm--refresh-timer
+            (run-at-time 0.008 nil
+                         (lambda ()
+                           (when (buffer-live-p buf)
+                             (with-current-buffer buf
+                               (setq gterm--needs-refresh nil
+                                     gterm--refresh-timer nil)
+                               (gterm--refresh)))))))))
+
 ;; ── Process filter ──────────────────────────────────────────────────────
 
 (defun gterm--filter (process output)
@@ -108,7 +128,9 @@ PROCESS is the shell process. OUTPUT is the raw string."
           (unless gterm--scrollback-p
             (when (fboundp 'gterm-scroll-viewport)
               (gterm-scroll-viewport gterm--term 0)))
-          (gterm--refresh))))))
+          ;; Batch refreshes: schedule a refresh if one isn't pending.
+          ;; This coalesces rapid output chunks into a single render.
+          (gterm--schedule-refresh))))))
 
 (defun gterm--sentinel (process _event)
   "Process sentinel: clean up when the shell exits.
@@ -242,6 +264,69 @@ PROCESS is the shell process."
 (defun gterm-send-C-left ()  (interactive) (gterm--send-escape-seq "[1;5D"))
 (defun gterm-send-M-right () (interactive) (gterm--send-escape-seq "[1;3C"))
 (defun gterm-send-M-left ()  (interactive) (gterm--send-escape-seq "[1;3D"))
+
+;; ── Paste and Copy ──────────────────────────────────────────────────────
+
+(defun gterm-yank ()
+  "Paste the most recent kill ring entry into the terminal.
+Uses bracketed paste mode if the terminal has it enabled."
+  (interactive)
+  (let ((text (current-kill 0 t)))
+    (when text
+      (gterm--send-paste text))))
+
+(defvar-local gterm--copy-mode nil
+  "Non-nil when gterm is in copy/selection mode.")
+
+(defun gterm-copy-mode ()
+  "Toggle copy mode for selecting and copying terminal text.
+In copy mode, normal Emacs movement and selection keys work.
+Press `q' or `C-c C-c' to exit copy mode.
+Selected text is copied to the kill ring on exit."
+  (interactive)
+  (if gterm--copy-mode
+      (gterm--copy-mode-exit)
+    (gterm--copy-mode-enter)))
+
+(defun gterm--copy-mode-enter ()
+  "Enter copy mode."
+  (setq gterm--copy-mode t)
+  (setq buffer-read-only t)
+  (use-local-map gterm-copy-mode-map)
+  (message "gterm copy mode: move and select, `q' to exit, `y' to copy & exit"))
+
+(defun gterm--copy-mode-exit ()
+  "Exit copy mode and return to terminal mode."
+  (when (region-active-p)
+    (kill-ring-save (region-beginning) (region-end))
+    (message "Copied to kill ring"))
+  (deactivate-mark)
+  (setq gterm--copy-mode nil)
+  (use-local-map gterm-mode-map))
+
+(defun gterm-copy-mode-copy-and-exit ()
+  "Copy selected region to kill ring and exit copy mode."
+  (interactive)
+  (when (region-active-p)
+    (kill-ring-save (region-beginning) (region-end))
+    (message "Copied to kill ring"))
+  (gterm--copy-mode-exit))
+
+(defvar gterm-copy-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; Inherit standard Emacs movement keys
+    (set-keymap-parent map special-mode-map)
+    ;; Exit keys
+    (define-key map (kbd "q") #'gterm--copy-mode-exit)
+    (define-key map (kbd "C-c C-c") #'gterm--copy-mode-exit)
+    ;; Copy and exit
+    (define-key map (kbd "y") #'gterm-copy-mode-copy-and-exit)
+    (define-key map (kbd "M-w") #'gterm-copy-mode-copy-and-exit)
+    ;; Selection
+    (define-key map (kbd "C-SPC") #'set-mark-command)
+    (define-key map (kbd "C-@") #'set-mark-command)
+    map)
+  "Keymap for gterm copy mode.")
 
 ;; ── Scrollback ──────────────────────────────────────────────────────────
 
@@ -396,6 +481,11 @@ Event format: (drag-n-drop POSITION (file OPERATIONS PATH...))."
     (define-key map (kbd "C-<left>") #'gterm-send-C-left)
     (define-key map (kbd "M-<right>") #'gterm-send-M-right)
     (define-key map (kbd "M-<left>") #'gterm-send-M-left)
+    ;; Paste from kill ring
+    (define-key map (kbd "C-y") #'gterm-yank)
+    (define-key map (kbd "s-v") #'gterm-yank)  ; Cmd-V on macOS
+    ;; Copy mode
+    (define-key map (kbd "C-c C-k") #'gterm-copy-mode)
     ;; Scrollback (Shift+PageUp/Down like most terminals)
     (define-key map (kbd "S-<prior>") #'gterm-scroll-up)
     (define-key map (kbd "S-<next>") #'gterm-scroll-down)
@@ -426,6 +516,8 @@ Event format: (drag-n-drop POSITION (file OPERATIONS PATH...))."
 
 (defun gterm--kill-buffer ()
   "Clean up when the gterm buffer is killed."
+  (when gterm--refresh-timer
+    (cancel-timer gterm--refresh-timer))
   (when (and gterm--process (process-live-p gterm--process))
     (delete-process gterm--process))
   (when gterm--term
