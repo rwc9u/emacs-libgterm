@@ -169,13 +169,21 @@ Uses incremental rendering after the first full render."
   (setq gterm--rendered nil)
   (gterm--refresh))
 
+(defcustom gterm-render-delay 0.033
+  "Delay in seconds before rendering after output.
+Lower values give smoother display but use more CPU.
+Default 0.033 (~30fps).  Increase for better throughput
+with heavy output (e.g. 0.1 for 10fps)."
+  :type 'number
+  :group 'gterm)
+
 (defun gterm--schedule-refresh ()
   "Schedule a batched refresh.  Coalesces rapid output into one render."
   (unless gterm--needs-refresh
     (setq gterm--needs-refresh t)
     (let ((buf (current-buffer)))
       (setq gterm--refresh-timer
-            (run-at-time 0.008 nil
+            (run-at-time gterm-render-delay nil
                          (lambda ()
                            (when (buffer-live-p buf)
                              (with-current-buffer buf
