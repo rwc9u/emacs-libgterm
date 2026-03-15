@@ -140,7 +140,6 @@ zig build -Doptimize=ReleaseFast
 
 - **Character width mismatches** — some Unicode characters (Powerline glyphs, NerdFont icons) may render at different widths in Emacs vs the terminal, causing minor alignment issues with fancy prompts
 - **No mouse support** — programs like htop that use mouse events are not yet supported
-- **Full screen re-render** — each refresh redraws the entire screen; incremental dirty-row rendering is planned
 
 ## License
 
