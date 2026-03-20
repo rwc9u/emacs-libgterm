@@ -65,6 +65,13 @@
   :type 'boolean
   :group 'gterm)
 
+(defun gterm--detect-emacs-include ()
+  "Detect the directory containing emacs-module.h.
+Returns the path if found, nil otherwise."
+  (let ((dir (expand-file-name "../include" data-directory)))
+    (when (file-exists-p (expand-file-name "emacs-module.h" dir))
+      dir)))
+
 (defun gterm-module-compile ()
   "Compile the gterm dynamic module.
 Automatically clones Ghostty and applies the build patch if needed."
@@ -72,6 +79,11 @@ Automatically clones Ghostty and applies the build patch if needed."
   (let ((default-directory gterm-source-dir)
         (buf (get-buffer-create "*gterm-compile*")))
     (with-current-buffer buf (erase-buffer))
+    ;; Check that build.zig exists in source dir (package managers may
+    ;; only copy .el files — straight.el needs :files ("*"))
+    (unless (file-exists-p (expand-file-name "build.zig" gterm-source-dir))
+      (error "gterm: build.zig not found in %s. If using straight.el, add :files (\"*\") to the recipe to include Zig source files"
+             gterm-source-dir))
     ;; Check for zig
     (unless (executable-find "zig")
       (error "gterm: `zig` not found in PATH. Install Zig 0.15.2+ (https://ziglang.org/download/)"))
@@ -100,13 +112,17 @@ Automatically clones Ghostty and applies the build patch if needed."
           (call-process "git" nil buf t
                         "-C" ghostty-dir
                         "apply" patch-file))))
-    ;; Compile
-    (message "gterm: compiling module with `zig build`...")
-    (let ((exit-code (call-process "zig" nil buf t "build")))
-      (if (= exit-code 0)
-          (message "gterm: module compiled successfully")
-        (pop-to-buffer buf)
-        (error "gterm: compilation failed (exit code %d). See *gterm-compile* buffer" exit-code)))))
+    ;; Compile — auto-detect emacs-module.h location
+    (let* ((emacs-include (gterm--detect-emacs-include))
+           (zig-args (append '("build")
+                             (when emacs-include
+                               (list (format "-Demacs-include=%s" emacs-include))))))
+      (message "gterm: compiling module with `zig %s`..." (string-join zig-args " "))
+      (let ((exit-code (apply #'call-process "zig" nil buf t zig-args)))
+        (if (= exit-code 0)
+            (message "gterm: module compiled successfully")
+          (pop-to-buffer buf)
+          (error "gterm: compilation failed (exit code %d). See *gterm-compile* buffer" exit-code))))))
 
 (unless (featurep 'gterm-module)
   (unless (file-exists-p gterm-module-path)

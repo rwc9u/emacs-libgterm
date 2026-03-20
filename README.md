@@ -24,16 +24,29 @@ This project follows the same architecture as [emacs-libvterm](https://github.co
 
 ```elisp
 (use-package gterm
-  :straight (:host github :repo "rwc9u/emacs-libgterm")
+  :straight (:host github :repo "rwc9u/emacs-libgterm" :files ("*"))
   :init
   (setq gterm-always-compile-module t))
 ```
+
+> **Note:** The `:files ("*")` is required so straight.el copies the Zig source files and build system, not just `.el` files.
+
+### use-package + vc (Emacs 30+)
+
+```elisp
+(use-package gterm
+  :vc (:url "https://github.com/rwc9u/emacs-libgterm" :branch "main")
+  :init
+  (setq gterm-always-compile-module t))
+```
+
+> **Note:** `use-package :vc` copies all files by default, so no extra `:files` configuration is needed.
 
 ### use-package + quelpa
 
 ```elisp
 (use-package gterm
-  :quelpa (gterm :fetcher github :repo "rwc9u/emacs-libgterm")
+  :quelpa (gterm :fetcher github :repo "rwc9u/emacs-libgterm" :files ("*"))
   :init
   (setq gterm-always-compile-module t))
 ```
