@@ -87,7 +87,7 @@ fn initGlobalSymbols(env: *emacs.emacs_env) void {
 
 const GtermInstance = struct {
     terminal: Terminal,
-    stream: ghostty_vt.ReadonlyStream,
+    stream: ghostty_vt.TerminalStream,
     rows: u16,
     cols: u16,
     freed: bool = false,

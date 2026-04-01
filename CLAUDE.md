@@ -67,7 +67,7 @@ Both iterate ghostty-vt's page grid cell-by-cell:
 Commonly used Emacs symbols (`:foreground`, `:background`, `bold`, etc.) are pre-interned at module load via `make_global_ref` for performance.
 
 ### Persistent VT Stream
-The `ReadonlyStream` is stored on `GtermInstance` (not recreated per feed call) so escape sequences split across PTY output chunks are handled correctly.
+The `TerminalStream` is stored on `GtermInstance` (not recreated per feed call) so escape sequences split across PTY output chunks are handled correctly.
 
 ### Linefeed Mode
 ANSI mode 20 is enabled by default because Emacs strips `\r` from PTY output. Without this, `\n` alone doesn't return the cursor to column 0.
