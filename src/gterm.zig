@@ -57,6 +57,7 @@ var sym_mouse_face: emacs.emacs_value = undefined;
 var sym_highlight: emacs.emacs_value = undefined;
 var sym_keymap: emacs.emacs_value = undefined;
 var sym_gterm_link_map: emacs.emacs_value = undefined;
+var sym_add_text_properties: emacs.emacs_value = undefined;
 
 fn initGlobalSymbols(env: *emacs.emacs_env) void {
     sym_face = emacs.make_global_ref(env, env.intern.?(env, "face"));
@@ -81,6 +82,7 @@ fn initGlobalSymbols(env: *emacs.emacs_env) void {
     sym_highlight = emacs.make_global_ref(env, env.intern.?(env, "highlight"));
     sym_keymap = emacs.make_global_ref(env, env.intern.?(env, "keymap"));
     sym_gterm_link_map = emacs.make_global_ref(env, env.intern.?(env, "gterm-link-map"));
+    sym_add_text_properties = emacs.make_global_ref(env, env.intern.?(env, "add-text-properties"));
 }
 
 // ── Terminal wrapper ────────────────────────────────────────────────────
@@ -647,7 +649,10 @@ fn flushRun(
         const style = page.styles.get(page.memory, style_id);
         const face = buildFacePlist(env, style, palette);
         if (!emacs.check_exit(env) and env.is_not_nil.?(env, face)) {
-            emacs.put_text_property(env, start, end, sym_face, face);
+            var props_args = [_]emacs.emacs_value{ sym_face, face };
+            const props = env.funcall.?(env, env.intern.?(env, "list"), 2, &props_args);
+            var add_props_args = [_]emacs.emacs_value{ start, end, props };
+            _ = env.funcall.?(env, sym_add_text_properties, 3, &add_props_args);
         }
     }
 
@@ -668,15 +673,16 @@ fn applyHyperlink(
     const uri = entry.uri.slice(page.memory);
     if (uri.len == 0) return;
 
-    // Set help-echo (tooltip showing URL)
+    // Set properties (tooltip, hover highlight, click map) in one call
     const uri_str = env.make_string.?(env, uri.ptr, @intCast(uri.len));
-    emacs.put_text_property(env, start, end, sym_help_echo, uri_str);
-
-    // Set mouse-face for hover highlight
-    emacs.put_text_property(env, start, end, sym_mouse_face, sym_highlight);
-
-    // Set keymap for click handling
-    emacs.put_text_property(env, start, end, sym_keymap, sym_gterm_link_map);
+    var props_args = [_]emacs.emacs_value{
+        sym_help_echo,       uri_str,
+        sym_mouse_face,      sym_highlight,
+        sym_keymap,          sym_gterm_link_map,
+    };
+    const props = env.funcall.?(env, env.intern.?(env, "list"), 6, &props_args);
+    var add_props_args = [_]emacs.emacs_value{ start, end, props };
+    _ = env.funcall.?(env, sym_add_text_properties, 3, &add_props_args);
 }
 
 /// Render only dirty rows into an existing buffer.

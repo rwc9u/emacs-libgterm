@@ -234,19 +234,20 @@ Uses incremental rendering after the first full render."
   (gterm--refresh))
 
 (defun gterm--schedule-refresh ()
-  "Schedule a batched refresh.  Uses idle timer so Emacs drains all
-pending PTY output before rendering, preventing backpressure."
+  "Schedule a batched refresh. Uses a short non-idle timer to ensure
+updates happen even during constant output, while still coalescing
+multiple small PTY chunks into one render frame."
   (unless gterm--needs-refresh
     (setq gterm--needs-refresh t)
     (let ((buf (current-buffer)))
       (setq gterm--refresh-timer
-            (run-with-idle-timer 0.01 nil
-                                 (lambda ()
-                                   (when (buffer-live-p buf)
-                                     (with-current-buffer buf
-                                       (setq gterm--needs-refresh nil
-                                             gterm--refresh-timer nil)
-                                       (gterm--refresh)))))))))
+            (run-at-time 0.005 nil
+                         (lambda ()
+                           (when (buffer-live-p buf)
+                             (with-current-buffer buf
+                               (setq gterm--needs-refresh nil
+                                     gterm--refresh-timer nil)
+                               (gterm--refresh)))))))))
 
 ;; ── Process filter ──────────────────────────────────────────────────────
 
