@@ -50,6 +50,22 @@
 
 ;; ── Module loading ──────────────────────────────────────────────────────
 
+(declare-function gterm-new "gterm-module")
+(declare-function gterm-free "gterm-module")
+(declare-function gterm-feed "gterm-module")
+(declare-function gterm-content "gterm-module")
+(declare-function gterm-cursor-pos "gterm-module")
+(declare-function gterm-resize "gterm-module")
+(declare-function gterm-render "gterm-module")
+(declare-function gterm-render-dirty "gterm-module")
+(declare-function gterm-cursor-keys-mode "gterm-module")
+(declare-function gterm-cursor-info "gterm-module")
+(declare-function gterm-mode-enabled "gterm-module")
+(declare-function gterm-scroll-viewport "gterm-module")
+(declare-function gterm-viewport-is-bottom "gterm-module")
+(declare-function gterm-dirty-p "gterm-module")
+(declare-function gterm-clear-dirty "gterm-module")
+
 (defvar gterm-source-dir
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the gterm source files.")
