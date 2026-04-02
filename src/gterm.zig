@@ -90,6 +90,8 @@ const GtermInstance = struct {
     stream: ghostty_vt.TerminalStream,
     rows: u16,
     cols: u16,
+    last_cursor_row: u16 = 0,
+    last_cursor_col: u16 = 0,
     freed: bool = false,
 
     pub fn init(cols: u16, rows: u16) !*GtermInstance {
@@ -109,6 +111,8 @@ const GtermInstance = struct {
         self.stream = self.terminal.vtStream();
         self.rows = rows;
         self.cols = cols;
+        self.last_cursor_row = @intCast(self.terminal.screens.active.cursor.y);
+        self.last_cursor_col = @intCast(self.terminal.screens.active.cursor.x);
         return self;
     }
 
@@ -125,6 +129,52 @@ const GtermInstance = struct {
         // GC finalizer would dereference freed memory (use-after-free),
         // which can crash during sweep_vectors.
         // Instead, the finalizer is the sole owner of the struct memory.
+    }
+
+    /// Check if the terminal screen is dirty or the cursor has moved.
+    pub fn isDirty(self: *GtermInstance) bool {
+        const screen = self.terminal.screens.active;
+        if (screen.dirty.selection or screen.dirty.hyperlink_hover) return true;
+
+        const cursor_row: u16 = @intCast(screen.cursor.y);
+        const cursor_col: u16 = @intCast(screen.cursor.x);
+        if (cursor_row != self.last_cursor_row or cursor_col != self.last_cursor_col) return true;
+
+        const page_list = &screen.pages;
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+
+            if (pin.isDirty()) return true;
+        }
+
+        return false;
+    }
+
+    /// Clear all dirty flags and update the last known cursor position.
+    pub fn clearDirty(self: *GtermInstance) void {
+        const screen = self.terminal.screens.active;
+        const page_list = &screen.pages;
+
+        self.last_cursor_row = @intCast(screen.cursor.y);
+        self.last_cursor_col = @intCast(screen.cursor.x);
+
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+            pin.rowAndCell().row.dirty = false;
+        }
+
+        var page_node = page_list.pages.first;
+        while (page_node) |p| : (page_node = p.next) {
+            p.data.dirty = false;
+        }
     }
 
     /// Feed raw bytes through the terminal's VT parser.
@@ -910,16 +960,42 @@ fn gtermResize(
 
 /// (gterm-free TERM) -> nil
 fn gtermFree(
-    env: ?*emacs.emacs_env,
+    env_opt: ?*emacs.emacs_env,
     _: emacs.ptrdiff_t,
     args: [*c]emacs.emacs_value,
     _: ?*anyopaque,
 ) callconv(.c) emacs.emacs_value {
-    const e = env.?;
-    const instance = getInstanceFromArg(e, args[0]) orelse return emacs.nil(e);
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
     instance.deinit();
-    return emacs.nil(e);
+    return emacs.nil(env);
 }
+
+/// (gterm-dirty-p TERM) -> boolean
+fn gtermDirtyP(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    return if (instance.isDirty()) sym_t else emacs.nil(env);
+}
+
+/// (gterm-clear-dirty TERM) -> nil
+fn gtermClearDirty(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    instance.clearDirty();
+    return emacs.nil(env);
+}
+
 
 /// (gterm-cursor-keys-mode TERM) -> t or nil
 /// Return t if terminal is in application cursor keys mode (DECCKM).
@@ -1059,6 +1135,14 @@ export fn emacs_module_init(runtime: ?*emacs.emacs_runtime) callconv(.c) c_int {
 
     emacs.defun(env, "gterm-free", 1, 1, &gtermFree,
         "Free a gterm terminal instance.\nTERM is a terminal handle from `gterm-new'.\nThis is optional; the GC finalizer also handles cleanup.",
+    );
+
+    emacs.defun(env, "gterm-dirty-p", 1, 1, &gtermDirtyP,
+        "Return t if terminal screen is dirty or cursor has moved.\nTERM is a terminal handle from `gterm-new'.",
+    );
+
+    emacs.defun(env, "gterm-clear-dirty", 1, 1, &gtermClearDirty,
+        "Clear terminal dirty flags.\nTERM is a terminal handle from `gterm-new'.",
     );
 
     emacs.defun(env, "gterm-render", 1, 1, &gtermRender,

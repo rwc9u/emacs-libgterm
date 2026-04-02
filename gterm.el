@@ -184,13 +184,18 @@ Automatically clones Ghostty and applies the build patch if needed."
 (defun gterm--refresh ()
   "Refresh the buffer with current terminal content.
 Uses incremental rendering after the first full render."
-  (when gterm--term
+  (when (and gterm--term (gterm-dirty-p gterm--term))
     (let* ((inhibit-read-only t)
            (cursor-pos
-            ;; Always do full render for now (incremental disabled)
-            (progn
-              (erase-buffer)
-              (gterm-render gterm--term))))
+            (if gterm--rendered
+                (gterm-render-dirty gterm--term)
+              (progn
+                (erase-buffer)
+                (setq gterm--rendered t)
+                (gterm-render gterm--term)))))
+      ;; Clear dirty flags after rendering
+      (gterm-clear-dirty gterm--term)
+      
       (when (integerp cursor-pos)
         (goto-char cursor-pos))
       ;; Update cursor visibility and style from terminal state
