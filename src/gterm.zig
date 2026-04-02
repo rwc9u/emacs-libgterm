@@ -92,6 +92,7 @@ const GtermInstance = struct {
     cols: u16,
     last_cursor_row: u16 = 0,
     last_cursor_col: u16 = 0,
+    last_content_hash: u64 = 0,
     freed: bool = false,
 
     pub fn init(cols: u16, rows: u16) !*GtermInstance {
@@ -113,6 +114,7 @@ const GtermInstance = struct {
         self.cols = cols;
         self.last_cursor_row = @intCast(self.terminal.screens.active.cursor.y);
         self.last_cursor_col = @intCast(self.terminal.screens.active.cursor.x);
+        self.last_content_hash = self.computeContentHash();
         return self;
     }
 
@@ -131,6 +133,32 @@ const GtermInstance = struct {
         // Instead, the finalizer is the sole owner of the struct memory.
     }
 
+    /// Compute a simple hash of the visible screen content for change detection.
+    pub fn computeContentHash(self: *GtermInstance) u64 {
+        const screen = self.terminal.screens.active;
+        const page_list = &screen.pages;
+        var h: u64 = 0x811c9dc5;
+
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+            const page = &pin.node.data;
+            const page_row = page.getRow(pin.y);
+            const page_cells = page.getCells(page_row);
+
+            for (0..@min(self.cols, page_cells.len)) |c| {
+                const cell = &page_cells[c];
+                // Hash codepoint and style
+                h = h ^ (@as(u64, cell.codepoint()) << 16 | cell.style_id);
+                h = h *% 0x01000193;
+            }
+        }
+        return h;
+    }
+
     /// Check if the terminal screen is dirty or the cursor has moved.
     pub fn isDirty(self: *GtermInstance) bool {
         const screen = self.terminal.screens.active;
@@ -139,6 +167,9 @@ const GtermInstance = struct {
         const cursor_row: u16 = @intCast(screen.cursor.y);
         const cursor_col: u16 = @intCast(screen.cursor.x);
         if (cursor_row != self.last_cursor_row or cursor_col != self.last_cursor_col) return true;
+
+        // If content hash changed, it's dirty
+        if (self.computeContentHash() != self.last_content_hash) return true;
 
         const page_list = &screen.pages;
         var row: u16 = 0;
@@ -161,6 +192,7 @@ const GtermInstance = struct {
 
         self.last_cursor_row = @intCast(screen.cursor.y);
         self.last_cursor_col = @intCast(screen.cursor.x);
+        self.last_content_hash = self.computeContentHash();
 
         var row: u16 = 0;
         while (row < self.rows) : (row += 1) {

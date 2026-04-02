@@ -201,26 +201,28 @@ Automatically clones Ghostty and applies the build patch if needed."
   "Refresh the buffer with current terminal content.
 Uses incremental rendering after the first full render."
   (when (and gterm--term (gterm-dirty-p gterm--term))
-    (let* ((inhibit-read-only t)
-           (cursor-pos
-            (if gterm--rendered
-                (gterm-render-dirty gterm--term)
-              (progn
-                (erase-buffer)
-                (setq gterm--rendered t)
-                (gterm-render gterm--term)))))
-      ;; Clear dirty flags after rendering
-      (gterm-clear-dirty gterm--term)
-      
-      (when (integerp cursor-pos)
-        (goto-char cursor-pos))
-      ;; Update cursor visibility and style from terminal state
-      (when (fboundp 'gterm-cursor-info)
-        (let* ((info (gterm-cursor-info gterm--term))
-               (visible (car info))
-               (style (cdr info)))
-          (setq-local cursor-type
-                      (if visible style nil)))))))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t)
+          (inhibit-redisplay t))
+      (let ((cursor-pos
+             (if gterm--rendered
+                 (gterm-render-dirty gterm--term)
+               (progn
+                 (erase-buffer)
+                 (setq gterm--rendered t)
+                 (gterm-render gterm--term)))))
+        ;; Clear dirty flags after rendering
+        (gterm-clear-dirty gterm--term)
+        
+        (when (integerp cursor-pos)
+          (goto-char cursor-pos))
+        ;; Update cursor visibility and style from terminal state
+        (when (fboundp 'gterm-cursor-info)
+          (let* ((info (gterm-cursor-info gterm--term))
+                 (visible (car info))
+                 (style (cdr info)))
+            (setq-local cursor-type
+                        (if visible style nil))))))))
 
 (defun gterm--full-refresh ()
   "Force a full screen re-render (not incremental)."
