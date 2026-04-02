@@ -68,13 +68,23 @@
 (defun gterm--detect-emacs-include ()
   "Detect the directory containing emacs-module.h.
 Returns the path if found, nil otherwise."
-  (let ((dir (expand-file-name "../include" data-directory)))
-    (when (file-exists-p (expand-file-name "emacs-module.h" dir))
-      dir)))
+  (let ((candidates
+         (list
+          ;; Homebrew emacs-plus: bin/../include (resolve symlink first)
+          (when-let* ((exe (executable-find invocation-name))
+                      (real (file-truename exe)))
+            (expand-file-name "../include" (file-name-directory real)))
+          ;; Standard .app bundle layout
+          (expand-file-name "../include" data-directory)
+          ;; Fallback: invocation-directory/../include
+          (expand-file-name "../include" invocation-directory))))
+    (seq-find (lambda (dir)
+                (and dir (file-exists-p (expand-file-name "emacs-module.h" dir))))
+              candidates)))
 
 (defun gterm-module-compile ()
   "Compile the gterm dynamic module.
-Automatically clones Ghostty and applies the build patch if needed."
+Automatically clones Ghostty if vendor/ghostty is not present."
   (interactive)
   (let ((default-directory gterm-source-dir)
         (buf (get-buffer-create "*gterm-compile*")))
@@ -84,9 +94,13 @@ Automatically clones Ghostty and applies the build patch if needed."
     (unless (file-exists-p (expand-file-name "build.zig" gterm-source-dir))
       (error "gterm: build.zig not found in %s. If using straight.el, add :files (\"*\") to the recipe to include Zig source files"
              gterm-source-dir))
-    ;; Check for zig
+    ;; Check for zig and verify version >= 0.15
     (unless (executable-find "zig")
       (error "gterm: `zig` not found in PATH. Install Zig 0.15.2+ (https://ziglang.org/download/)"))
+    (let ((zig-version (string-trim (shell-command-to-string "zig version"))))
+      (unless (string-match "^0\\.\\(1[5-9]\\|[2-9][0-9]\\)\\." zig-version)
+        (error "gterm: requires Zig 0.15+, but found %s. On macOS with Homebrew, run: brew unlink zig@0.14 && brew link zig"
+               zig-version)))
     ;; Check for git
     (unless (executable-find "git")
       (error "gterm: `git` not found in PATH"))
@@ -100,18 +114,7 @@ Automatically clones Ghostty and applies the build patch if needed."
                                        ghostty-dir)))
           (unless (= exit-code 0)
             (pop-to-buffer buf)
-            (error "gterm: failed to clone ghostty"))))
-      ;; Apply build patch if not already applied
-      (let ((patch-file (expand-file-name "patches/ghostty-build.patch" gterm-source-dir)))
-        (when (and (file-exists-p patch-file)
-                   (= 0 (call-process "git" nil nil nil
-                                       "-C" ghostty-dir
-                                       "diff" "--quiet" "build.zig")))
-          ;; build.zig has no local changes — apply patch
-          (message "gterm: applying ghostty build patch...")
-          (call-process "git" nil buf t
-                        "-C" ghostty-dir
-                        "apply" patch-file))))
+            (error "gterm: failed to clone ghostty")))))
     ;; Compile — auto-detect emacs-module.h location
     (let* ((emacs-include (gterm--detect-emacs-include))
            (zig-args (append '("build")

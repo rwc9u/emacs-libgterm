@@ -50,8 +50,8 @@ The `;; Version:` header in `gterm.el` must be bumped when pushing changes that 
 
 ## Key Technical Details
 
-### Ghostty Build Patch
-Ghostty's `build.zig` must be patched to guard XCFramework/macOS app initialization behind `emit-xcframework` flag. Without this, builds fail on systems without full Xcode. Our `build.zig` passes `emit-xcframework=false`, `emit-macos-app=false`, `emit-exe=false` via `lazyDependency`.
+### Ghostty Build Integration
+Our `build.zig` passes `emit-lib-vt=true` via `lazyDependency`. This flag tells ghostty's build system to only build `libghostty-vt`, skipping the macOS app, xcframework, and full libghostty — no Xcode required. Ghostty's `build.zig` already guards xcframework/macOS-app initialization behind `config.emit_xcframework or config.emit_macos_app`, so no patching is needed.
 
 ### Emacs Module API
 Bindings use `@cImport` of the real `emacs-module.h` header (from `/Applications/Emacs.app/Contents/Resources/include/`) for guaranteed ABI correctness. The include path is configurable via `-Demacs-include=`.
@@ -71,7 +71,7 @@ Both iterate ghostty-vt's page grid cell-by-cell:
 Commonly used Emacs symbols (`:foreground`, `:background`, `bold`, etc.) are pre-interned at module load via `make_global_ref` for performance.
 
 ### Persistent VT Stream
-The `ReadonlyStream` is stored on `GtermInstance` (not recreated per feed call) so escape sequences split across PTY output chunks are handled correctly.
+The `TerminalStream` is stored on `GtermInstance` (not recreated per feed call) so escape sequences split across PTY output chunks are handled correctly.
 
 ### Linefeed Mode
 ANSI mode 20 is enabled by default because Emacs strips `\r` from PTY output. Without this, `\n` alone doesn't return the cursor to column 0.
