@@ -204,25 +204,29 @@ Uses incremental rendering after the first full render."
     (let ((inhibit-read-only t)
           (inhibit-modification-hooks t)
           (inhibit-redisplay t))
-      (let ((cursor-pos
-             (if gterm--rendered
-                 (gterm-render-dirty gterm--term)
-               (progn
-                 (erase-buffer)
-                 (setq gterm--rendered t)
-                 (gterm-render gterm--term)))))
-        ;; Clear dirty flags after rendering
-        (gterm-clear-dirty gterm--term)
-        
-        (when (integerp cursor-pos)
-          (goto-char cursor-pos))
-        ;; Update cursor visibility and style from terminal state
-        (when (fboundp 'gterm-cursor-info)
-          (let* ((info (gterm-cursor-info gterm--term))
-                 (visible (car info))
-                 (style (cdr info)))
-            (setq-local cursor-type
-                        (if visible style nil))))))))
+      ;; Loop to drain all pending output before we allow redisplay
+      (while (and gterm--term (gterm-dirty-p gterm--term))
+        (let ((cursor-pos
+               (if gterm--rendered
+                   (gterm-render-dirty gterm--term)
+                 (progn
+                   (erase-buffer)
+                   (setq gterm--rendered t)
+                   (gterm-render gterm--term)))))
+          ;; Clear dirty flags after rendering this frame
+          (gterm-clear-dirty gterm--term)
+          
+          (when (integerp cursor-pos)
+            (goto-char cursor-pos))
+          ;; Update cursor visibility and style from terminal state
+          (when (fboundp 'gterm-cursor-info)
+            (let* ((info (gterm-cursor-info gterm--term))
+                   (visible (car info))
+                   (style (cdr info)))
+              (setq-local cursor-type
+                          (if visible style nil)))))))
+    ;; Force a single redisplay now that all pending data is rendered
+    (redisplay t)))
 
 (defun gterm--full-refresh ()
   "Force a full screen re-render (not incremental)."
