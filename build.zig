@@ -1,5 +1,31 @@
 const std = @import("std");
 
+/// Try to find the emacs-module.h include directory by running `emacs`.
+/// Checks several locations relative to invocation-directory to handle
+/// both macOS .app bundles and Homebrew prefix installs.
+/// Returns null if emacs is not found or the header is absent.
+fn detectEmacsInclude(b: *std.Build) ?[]const u8 {
+    const expr =
+        \\(let* ((d invocation-directory)
+        \\       (candidates (list
+        \\         (expand-file-name "../include" d)
+        \\         (expand-file-name "../Resources/include" d)
+        \\         (expand-file-name "../../../include" d))))
+        \\  (let ((found (seq-find (lambda (p)
+        \\                  (file-exists-p (expand-file-name "emacs-module.h" p)))
+        \\                candidates)))
+        \\    (when found (message "%s" found))))
+    ;
+    const result = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &.{ "emacs", "--batch", "--eval", expr },
+    }) catch return null;
+    if (result.term != .Exited or result.term.Exited != 0) return null;
+    const path = std.mem.trim(u8, result.stderr, &std.ascii.whitespace);
+    if (path.len == 0) return null;
+    return b.dupe(path);
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -14,21 +40,22 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add Emacs module header include path.
-    // Detected at build time; falls back to /Applications/Emacs.app.
+    // Pass -Demacs-include=<path> to override.  Auto-detected via `emacs`
+    // in PATH if not specified; falls back to the macOS .app bundle path.
     const emacs_include = b.option(
         []const u8,
         "emacs-include",
         "Path to directory containing emacs-module.h",
-    ) orelse "/Applications/Emacs.app/Contents/Resources/include";
+    ) orelse detectEmacsInclude(b) orelse
+        "/Applications/Emacs.app/Contents/Resources/include";
 
     lib_mod.addSystemIncludePath(.{ .cwd_relative = emacs_include });
 
     // Add ghostty-vt dependency.
-    // We disable xcframework/macos-app/exe to avoid requiring full Xcode.
+    // emit-lib-vt=true builds only libghostty-vt, skipping the macOS app,
+    // xcframework, and the full libghostty — avoids requiring Xcode.
     if (b.lazyDependency("ghostty", .{
-        .@"emit-xcframework" = false,
-        .@"emit-macos-app" = false,
-        .@"emit-exe" = false,
+        .@"emit-lib-vt" = true,
     })) |dep| {
         lib_mod.addImport("ghostty-vt", dep.module("ghostty-vt"));
     }
