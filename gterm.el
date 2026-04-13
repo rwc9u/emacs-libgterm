@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Rob Christie
 ;; Author: Rob Christie
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "25.1"))
 ;; Keywords: terminals, processes
 ;; URL: https://github.com/rwc9u/emacs-libgterm
