@@ -57,6 +57,7 @@ var sym_mouse_face: emacs.emacs_value = undefined;
 var sym_highlight: emacs.emacs_value = undefined;
 var sym_keymap: emacs.emacs_value = undefined;
 var sym_gterm_link_map: emacs.emacs_value = undefined;
+var sym_add_text_properties: emacs.emacs_value = undefined;
 
 fn initGlobalSymbols(env: *emacs.emacs_env) void {
     sym_face = emacs.make_global_ref(env, env.intern.?(env, "face"));
@@ -81,6 +82,7 @@ fn initGlobalSymbols(env: *emacs.emacs_env) void {
     sym_highlight = emacs.make_global_ref(env, env.intern.?(env, "highlight"));
     sym_keymap = emacs.make_global_ref(env, env.intern.?(env, "keymap"));
     sym_gterm_link_map = emacs.make_global_ref(env, env.intern.?(env, "gterm-link-map"));
+    sym_add_text_properties = emacs.make_global_ref(env, env.intern.?(env, "add-text-properties"));
 }
 
 // ── Terminal wrapper ────────────────────────────────────────────────────
@@ -90,6 +92,9 @@ const GtermInstance = struct {
     stream: ghostty_vt.TerminalStream,
     rows: u16,
     cols: u16,
+    last_cursor_row: u16 = 0,
+    last_cursor_col: u16 = 0,
+    last_content_hash: u64 = 0,
     freed: bool = false,
 
     pub fn init(cols: u16, rows: u16) !*GtermInstance {
@@ -109,6 +114,9 @@ const GtermInstance = struct {
         self.stream = self.terminal.vtStream();
         self.rows = rows;
         self.cols = cols;
+        self.last_cursor_row = @intCast(self.terminal.screens.active.cursor.y);
+        self.last_cursor_col = @intCast(self.terminal.screens.active.cursor.x);
+        self.last_content_hash = self.computeContentHash();
         return self;
     }
 
@@ -125,6 +133,82 @@ const GtermInstance = struct {
         // GC finalizer would dereference freed memory (use-after-free),
         // which can crash during sweep_vectors.
         // Instead, the finalizer is the sole owner of the struct memory.
+    }
+
+    /// Compute a simple hash of the visible screen content for change detection.
+    pub fn computeContentHash(self: *GtermInstance) u64 {
+        const screen = self.terminal.screens.active;
+        const page_list = &screen.pages;
+        var h: u64 = 0x811c9dc5;
+
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+            const page = &pin.node.data;
+            const page_row = page.getRow(pin.y);
+            const page_cells = page.getCells(page_row);
+
+            for (0..@min(self.cols, page_cells.len)) |c| {
+                const cell = &page_cells[c];
+                // Hash codepoint and style
+                h = h ^ (@as(u64, cell.codepoint()) << 16 | cell.style_id);
+                h = h *% 0x01000193;
+            }
+        }
+        return h;
+    }
+
+    /// Check if the terminal screen is dirty or the cursor has moved.
+    pub fn isDirty(self: *GtermInstance) bool {
+        const screen = self.terminal.screens.active;
+        if (screen.dirty.selection or screen.dirty.hyperlink_hover) return true;
+
+        const cursor_row: u16 = @intCast(screen.cursor.y);
+        const cursor_col: u16 = @intCast(screen.cursor.x);
+        if (cursor_row != self.last_cursor_row or cursor_col != self.last_cursor_col) return true;
+
+        // If content hash changed, it's dirty
+        if (self.computeContentHash() != self.last_content_hash) return true;
+
+        const page_list = &screen.pages;
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+
+            if (pin.isDirty()) return true;
+        }
+
+        return false;
+    }
+
+    /// Clear all dirty flags and update the last known cursor position.
+    pub fn clearDirty(self: *GtermInstance) void {
+        const screen = self.terminal.screens.active;
+        const page_list = &screen.pages;
+
+        self.last_cursor_row = @intCast(screen.cursor.y);
+        self.last_cursor_col = @intCast(screen.cursor.x);
+        self.last_content_hash = self.computeContentHash();
+
+        var row: u16 = 0;
+        while (row < self.rows) : (row += 1) {
+            const pin = page_list.pin(.{ .viewport = .{
+                .x = 0,
+                .y = row,
+            } }) orelse continue;
+            pin.rowAndCell().row.dirty = false;
+        }
+
+        var page_node = page_list.pages.first;
+        while (page_node) |p| : (page_node = p.next) {
+            p.data.dirty = false;
+        }
     }
 
     /// Feed raw bytes through the terminal's VT parser.
@@ -565,7 +649,10 @@ fn flushRun(
         const style = page.styles.get(page.memory, style_id);
         const face = buildFacePlist(env, style, palette);
         if (!emacs.check_exit(env) and env.is_not_nil.?(env, face)) {
-            emacs.put_text_property(env, start, end, sym_face, face);
+            var props_args = [_]emacs.emacs_value{ sym_face, face };
+            const props = env.funcall.?(env, env.intern.?(env, "list"), 2, &props_args);
+            var add_props_args = [_]emacs.emacs_value{ start, end, props };
+            _ = env.funcall.?(env, sym_add_text_properties, 3, &add_props_args);
         }
     }
 
@@ -586,15 +673,16 @@ fn applyHyperlink(
     const uri = entry.uri.slice(page.memory);
     if (uri.len == 0) return;
 
-    // Set help-echo (tooltip showing URL)
+    // Set properties (tooltip, hover highlight, click map) in one call
     const uri_str = env.make_string.?(env, uri.ptr, @intCast(uri.len));
-    emacs.put_text_property(env, start, end, sym_help_echo, uri_str);
-
-    // Set mouse-face for hover highlight
-    emacs.put_text_property(env, start, end, sym_mouse_face, sym_highlight);
-
-    // Set keymap for click handling
-    emacs.put_text_property(env, start, end, sym_keymap, sym_gterm_link_map);
+    var props_args = [_]emacs.emacs_value{
+        sym_help_echo,       uri_str,
+        sym_mouse_face,      sym_highlight,
+        sym_keymap,          sym_gterm_link_map,
+    };
+    const props = env.funcall.?(env, env.intern.?(env, "list"), 6, &props_args);
+    var add_props_args = [_]emacs.emacs_value{ start, end, props };
+    _ = env.funcall.?(env, sym_add_text_properties, 3, &add_props_args);
 }
 
 /// Render only dirty rows into an existing buffer.
@@ -910,16 +998,42 @@ fn gtermResize(
 
 /// (gterm-free TERM) -> nil
 fn gtermFree(
-    env: ?*emacs.emacs_env,
+    env_opt: ?*emacs.emacs_env,
     _: emacs.ptrdiff_t,
     args: [*c]emacs.emacs_value,
     _: ?*anyopaque,
 ) callconv(.c) emacs.emacs_value {
-    const e = env.?;
-    const instance = getInstanceFromArg(e, args[0]) orelse return emacs.nil(e);
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
     instance.deinit();
-    return emacs.nil(e);
+    return emacs.nil(env);
 }
+
+/// (gterm-dirty-p TERM) -> boolean
+fn gtermDirtyP(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    return if (instance.isDirty()) sym_t else emacs.nil(env);
+}
+
+/// (gterm-clear-dirty TERM) -> nil
+fn gtermClearDirty(
+    env_opt: ?*emacs.emacs_env,
+    _: emacs.ptrdiff_t,
+    args: [*c]emacs.emacs_value,
+    _: ?*anyopaque,
+) callconv(.c) emacs.emacs_value {
+    const env = env_opt.?;
+    const instance = getInstanceFromArg(env, args[0]) orelse return emacs.nil(env);
+    instance.clearDirty();
+    return emacs.nil(env);
+}
+
 
 /// (gterm-cursor-keys-mode TERM) -> t or nil
 /// Return t if terminal is in application cursor keys mode (DECCKM).
@@ -1059,6 +1173,14 @@ export fn emacs_module_init(runtime: ?*emacs.emacs_runtime) callconv(.c) c_int {
 
     emacs.defun(env, "gterm-free", 1, 1, &gtermFree,
         "Free a gterm terminal instance.\nTERM is a terminal handle from `gterm-new'.\nThis is optional; the GC finalizer also handles cleanup.",
+    );
+
+    emacs.defun(env, "gterm-dirty-p", 1, 1, &gtermDirtyP,
+        "Return t if terminal screen is dirty or cursor has moved.\nTERM is a terminal handle from `gterm-new'.",
+    );
+
+    emacs.defun(env, "gterm-clear-dirty", 1, 1, &gtermClearDirty,
+        "Clear terminal dirty flags.\nTERM is a terminal handle from `gterm-new'.",
     );
 
     emacs.defun(env, "gterm-render", 1, 1, &gtermRender,

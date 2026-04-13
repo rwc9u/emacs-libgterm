@@ -50,6 +50,22 @@
 
 ;; ── Module loading ──────────────────────────────────────────────────────
 
+(declare-function gterm-new "gterm-module")
+(declare-function gterm-free "gterm-module")
+(declare-function gterm-feed "gterm-module")
+(declare-function gterm-content "gterm-module")
+(declare-function gterm-cursor-pos "gterm-module")
+(declare-function gterm-resize "gterm-module")
+(declare-function gterm-render "gterm-module")
+(declare-function gterm-render-dirty "gterm-module")
+(declare-function gterm-cursor-keys-mode "gterm-module")
+(declare-function gterm-cursor-info "gterm-module")
+(declare-function gterm-mode-enabled "gterm-module")
+(declare-function gterm-scroll-viewport "gterm-module")
+(declare-function gterm-viewport-is-bottom "gterm-module")
+(declare-function gterm-dirty-p "gterm-module")
+(declare-function gterm-clear-dirty "gterm-module")
+
 (defvar gterm-source-dir
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the gterm source files.")
@@ -187,22 +203,33 @@ Automatically clones Ghostty if vendor/ghostty is not present."
 (defun gterm--refresh ()
   "Refresh the buffer with current terminal content.
 Uses incremental rendering after the first full render."
-  (when gterm--term
-    (let* ((inhibit-read-only t)
-           (cursor-pos
-            ;; Always do full render for now (incremental disabled)
-            (progn
-              (erase-buffer)
-              (gterm-render gterm--term))))
-      (when (integerp cursor-pos)
-        (goto-char cursor-pos))
-      ;; Update cursor visibility and style from terminal state
-      (when (fboundp 'gterm-cursor-info)
-        (let* ((info (gterm-cursor-info gterm--term))
-               (visible (car info))
-               (style (cdr info)))
-          (setq-local cursor-type
-                      (if visible style nil)))))))
+  (when (and gterm--term (gterm-dirty-p gterm--term))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t)
+          (inhibit-redisplay t))
+      ;; Loop to drain all pending output before we allow redisplay
+      (while (and gterm--term (gterm-dirty-p gterm--term))
+        (let ((cursor-pos
+               (if gterm--rendered
+                   (gterm-render-dirty gterm--term)
+                 (progn
+                   (erase-buffer)
+                   (setq gterm--rendered t)
+                   (gterm-render gterm--term)))))
+          ;; Clear dirty flags after rendering this frame
+          (gterm-clear-dirty gterm--term)
+          
+          (when (integerp cursor-pos)
+            (goto-char cursor-pos))
+          ;; Update cursor visibility and style from terminal state
+          (when (fboundp 'gterm-cursor-info)
+            (let* ((info (gterm-cursor-info gterm--term))
+                   (visible (car info))
+                   (style (cdr info)))
+              (setq-local cursor-type
+                          (if visible style nil)))))))
+    ;; Force a single redisplay now that all pending data is rendered
+    (redisplay t)))
 
 (defun gterm--full-refresh ()
   "Force a full screen re-render (not incremental)."
@@ -210,19 +237,20 @@ Uses incremental rendering after the first full render."
   (gterm--refresh))
 
 (defun gterm--schedule-refresh ()
-  "Schedule a batched refresh.  Uses idle timer so Emacs drains all
-pending PTY output before rendering, preventing backpressure."
+  "Schedule a batched refresh. Uses a short non-idle timer to ensure
+updates happen even during constant output, while still coalescing
+multiple small PTY chunks into one render frame."
   (unless gterm--needs-refresh
     (setq gterm--needs-refresh t)
     (let ((buf (current-buffer)))
       (setq gterm--refresh-timer
-            (run-with-idle-timer 0.01 nil
-                                 (lambda ()
-                                   (when (buffer-live-p buf)
-                                     (with-current-buffer buf
-                                       (setq gterm--needs-refresh nil
-                                             gterm--refresh-timer nil)
-                                       (gterm--refresh)))))))))
+            (run-at-time 0.005 nil
+                         (lambda ()
+                           (when (buffer-live-p buf)
+                             (with-current-buffer buf
+                               (setq gterm--needs-refresh nil
+                                     gterm--refresh-timer nil)
+                               (gterm--refresh)))))))))
 
 ;; ── Process filter ──────────────────────────────────────────────────────
 
