@@ -343,6 +343,34 @@ optionally at the given line number."
     (when code
       (gterm-send-string (string code)))))
 
+(defun gterm-send-next-key ()
+  "Read the next key event and send it to the terminal.
+This allows sending keys that are normally reserved by Emacs,
+such as C-x or C-g.  For example, press \\`C-q C-x' to send
+Ctrl-X to a program like nano."
+  (interactive)
+  (let* ((inhibit-quit t)
+         (event (read-event "gterm send key: "))
+         (basic (event-basic-type event))
+         (mods (event-modifiers event)))
+    (cond
+     ;; Ctrl + letter
+     ((and (memq 'control mods) (integerp basic)
+           (>= basic ?a) (<= basic ?z))
+      (gterm-send-string (string (- basic ?a -1))))
+     ;; C-g comes through as quit event when inhibit-quit is set
+     ((eq event ?\C-g)
+      (gterm-send-string "\a"))
+     ;; Plain character
+     ((integerp basic)
+      (gterm-send-string (string basic)))
+     ;; Named keys
+     ((eq basic 'return) (gterm-send-string "\r"))
+     ((eq basic 'backspace) (gterm-send-string "\177"))
+     ((eq basic 'escape) (gterm-send-string "\e"))
+     ((eq basic 'tab) (gterm-send-string "\t"))
+     (t (message "gterm: don't know how to send %s" (key-description (vector event)))))))
+
 ;; Keep explicit versions for C-c sub-commands
 (defun gterm-send-ctrl-c ()
   "Send Ctrl-C to the shell."
@@ -661,6 +689,8 @@ Event format: (drag-n-drop POSITION (file OPERATIONS PATH...))."
     (define-key map (kbd "C-<left>") #'gterm-send-C-left)
     (define-key map (kbd "M-<right>") #'gterm-send-M-right)
     (define-key map (kbd "M-<left>") #'gterm-send-M-left)
+    ;; Send next key verbatim (for reserved keys like C-x, C-g)
+    (define-key map (kbd "C-q") #'gterm-send-next-key)
     ;; Paste from kill ring
     (define-key map (kbd "C-y") #'gterm-yank)
     (define-key map (kbd "s-v") #'gterm-yank)  ; Cmd-V on macOS
