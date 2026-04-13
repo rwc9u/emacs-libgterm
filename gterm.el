@@ -626,7 +626,7 @@ Event format: (drag-n-drop POSITION (file OPERATIONS PATH...))."
     ;; C-h (help), C-m (same as RET), C-i (same as TAB)
     (cl-loop for c from ?a to ?z
              unless (memq c '(?c ?g ?h ?i ?m ?x))
-             do (define-key map (vector (list 'control c)) #'gterm-send-ctrl-key))
+             do (define-key map (vector 'control c) #'gterm-send-ctrl-key))
     ;; Arrow keys
     (define-key map (kbd "<up>") #'gterm-send-up)
     (define-key map (kbd "<down>") #'gterm-send-down)
